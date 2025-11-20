@@ -1,0 +1,92 @@
+
+free socket: channel.                       (* socket channel *)
+
+fun funcG(bitstring, bitstring): channel.   (* address selection function G *)
+fun funcE(bitstring, bitstring): bitstring. (* encoding function E *)
+reduc forall m: bitstring, k: bitstring;    
+    funcD(funcE(m, k), k) = m.              (* decoding function D *)
+
+fun hash(bitstring): bitstring.             
+fun hmac(bitstring, bitstring): bitstring.
+fun concat(bitstring, bitstring): bitstring.
+
+free Msi: bitstring [private].              (* sensitive information *)
+
+event ev1apass.                             (* Step 1a Client authentication *)
+event ev1bpass.                             (* Step 1b Server authentication  *)
+event ev2pass.                              (* Step 2  Sensitive information transmission *)
+
+(* ------------------ Server Process ------------------ *)
+let processServer(C0: bitstring) = 
+    (* step 1a *)
+    new R1: bitstring;
+    new RS: bitstring;                            (* Generate: R1, RS *)
+    let HS = hash(RS) in 
+    out(socket, (R1, HS));                        (* send R1, HS = H(RS) via socket *)
+    let cable1 = funcG(R1, C0) in                 (* PS,C = G(R1, C0) *)
+    out(cable1, RS);                              (* send RS via cable *)
+
+    (* step 1b *)
+    in(socket, (R2: bitstring, HC: bitstring));   (* recv R2, HC=H(RC||C1) via socket *)
+    let cable2 = funcG(R2, C0) in                 (* PS,C = G(R2, C0) *)
+    in(cable2, (RC: bitstring, C1: bitstring));   (* recv RC||C1 via cable *)
+    if HC = hash(concat(RC,C1)) then              (* Check: H(RC||C1)=HC? *)
+        event ev1bpass;
+
+    (* step 2 *)
+    new R3: bitstring;                            (* Generate: R3 *)
+    let Csi = funcE(Msi, RS) in                   (* CSI = E(RS, MSI) *)
+    let Hsi = hmac(RC, Csi) in     
+    out(socket, (R3, Hsi));                       (* send R3, HSI = HMAC(RC, CSI) via socket *)
+    let cable3 = funcG(R3, C1) in                 (* PS,C = G(R3, C1) *)
+    out(cable3, Csi).                             (* send CSI via cable *)
+
+(* ------------------ Client Process ------------------ *)
+let processClient(C0: bitstring) = 
+    (* step 1a *)
+    in(socket, (R1: bitstring, HS: bitstring));   (* recv R1, HS = H(RS) via socket *)
+    let cable1 = funcG(R1, C0) in                 (* PS,C = G(R1, C0) *)
+    in(cable1, RS: bitstring);                    (* recv RS via cable *)
+    if HS = hash(RS) then                         (* Check: H(RS) = HS ? *)
+        event ev1apass;                           (* check pass *)
+
+    (* step 1b *)
+    new R2: bitstring;
+    new RC: bitstring;
+    new C1: bitstring;                            (* Generate: R2, RC ; Select: C1 *)
+    let HC = hash(concat(RC, C1)) in 
+    out(socket, (R2, HC));                        (* send R2, HC=H(RC||C1) via socket *)
+    let cable2 = funcG(R2, C0) in                 (* PS,C = G(R2, C0) *)
+    out(cable2, (RC, C1));                        (* send RC||C1 via cable *)
+
+    (* step 2 *)
+    in(socket, (R3: bitstring, Hsi: bitstring));  (* recv R3, HSI = HMAC(RC, CSI) via socket *)
+    let cable3 = funcG(R3, C1) in                 (* PS,C = G(R3, C1) *)
+    in(cable3, Csi: bitstring);                   (* recv CSI via cable *)
+    if Hsi = hmac(RC, Csi) then                   (* Check: HMAC(RC, CSI) = HSI ? *)
+        event ev2pass;                            (* check pass *)
+    let SI = funcD(Csi, RS).                      (* Store: MSI = D(RS, CSI) *)
+
+(* ------------------ Queries ------------------ *)
+
+query attacker(Msi).
+
+query event(ev2pass) ==> event(ev1apass).
+query event(ev2pass) ==> event(ev1bpass).
+
+query event(ev1apass).
+query event(ev1bpass).
+query event(ev2pass).
+
+process 
+    new victim_user:   bitstring;    (* the victim shares the default cable configuration C0, accessible exclusively by the victim user *)
+    new attacker_user: bitstring;                  
+    
+    (* No Attack *)
+    ( (processServer(victim_user)) | (processClient(victim_user)) )
+
+    (* Client Impersonation Attack *)
+    (* (processServer(victim_user)) | (processClient(attacker_user)) *)
+
+    (* Server Impersonation Attack *)
+    (* (processServer(attacker_user)) | (processClient(victim_user)) *)
